@@ -17,12 +17,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#include "Profiler.h"
 #include <HuffmanVLC.h>
 
 namespace SmackerCommon {
 
 uint16_t VLC_GetCodeBits(BitReader &bits, VLCtable &table)
 {
+    //FunctionProfiler profiler("VLC_GetCodeBits");
 	uint32_t codeBits = 0;
 
 	// search each length array

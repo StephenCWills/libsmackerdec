@@ -48,6 +48,8 @@
 #include <assert.h>
 #include <climits>
 
+#include "Profiler.h"
+
 std::vector<class SmackerDecoder*> classInstances;
 
 SmackerHandle Smacker_Open(SDL_RWops *rwops)
@@ -131,6 +133,7 @@ uint32_t Smacker_GetCurrentFrameNum(SmackerHandle &handle)
 
 uint32_t Smacker_GetNextFrame(SmackerHandle &handle)
 {
+	FunctionProfiler profiler("Smacker_GetNextFrame");
 	SmackerDecoder *decoder = classInstances[handle.instanceIndex];
 
 	uint32_t frameIndex = decoder->GetCurrentFrameNum();
@@ -281,6 +284,7 @@ static void last_reset(std::vector<int> &recode, int *last) {
 /* get code and update history */
 int SmackerDecoder::GetCode(SmackerCommon::BitReader &bits, std::vector<int> &recode, int *last)
 {
+	//FunctionProfiler profiler("GetCode");
 	int *table = &recode[0];
 
     int v, b;
@@ -717,6 +721,7 @@ void SmackerDecoder::GetNextFrame()
 
 int SmackerDecoder::ReadPacket()
 {
+	FunctionProfiler profiler("ReadPacket");
 	// test-remove
 	if (currentFrame >= nFrames)
 		return 1;
@@ -730,6 +735,7 @@ int SmackerDecoder::ReadPacket()
 	// handle palette change
 	if (frameFlag & kSMKpal)
 	{
+		FunctionProfiler paletteProfiler("PaletteChange");
 		int size, sz, t, off, j, pos;
         uint8_t *pal = palette;
         uint8_t oldpal[768];
@@ -802,6 +808,7 @@ int SmackerDecoder::ReadPacket()
 
 int SmackerDecoder::DecodeFrame(uint32_t frameSize)
 {
+	FunctionProfiler profiler("DecodeFrame");
 	last_reset(mmap_tbl, mmap_last);
     last_reset(mclr_tbl, mclr_last);
     last_reset(full_tbl, full_last);
@@ -824,133 +831,151 @@ int SmackerDecoder::DecodeFrame(uint32_t frameSize)
 
 	SmackerCommon::BitReader bits(file, frameSize);
 
-	while (blk < blocks)
-	{
-		int type, run, mode;
-        uint16_t pix;
+    {
+        FunctionProfiler profiler("DecodeFrame loop");
+        while (blk < blocks)
+        {
+            int type, run, mode;
+            uint16_t pix;
 
-        type = GetCode(bits, type_tbl, type_last);
-        run = block_runs[(type >> 2) & 0x3F];
-        switch (type & 3)
-		{
-        case SMK_BLK_MONO:
-            while (run-- && blk < blocks)
-			{
-                int clr, map;
-                int hi, lo;
-                clr = GetCode(bits, mclr_tbl, mclr_last);
-                map = GetCode(bits, mmap_tbl, mmap_last);
+            type = GetCode(bits, type_tbl, type_last);
+            run = block_runs[(type >> 2) & 0x3F];
+            switch (type & 3)
+            {
+            case SMK_BLK_MONO:
+                {
+                    //FunctionProfiler profiler("DecodeFrame SMK_BLK_MONO");
+                    while (run-- && blk < blocks)
+                    {
+                        int clr, map;
+                        int hi, lo;
+                        clr = GetCode(bits, mclr_tbl, mclr_last);
+                        map = GetCode(bits, mmap_tbl, mmap_last);
 
-                out = picture + (blk / bw) * (stride * 4) + (blk % bw) * 4;
+                        out = picture + (blk / bw) * (stride * 4) + (blk % bw) * 4;
 
-                hi = clr >> 8;
-                lo = clr & 0xFF;
-                for (i = 0; i < 4; i++) 
-				{
-                    if (map & 1) out[0] = hi; else out[0] = lo;
-                    if (map & 2) out[1] = hi; else out[1] = lo;
-                    if (map & 4) out[2] = hi; else out[2] = lo;
-                    if (map & 8) out[3] = hi; else out[3] = lo;
-                    map >>= 4;
-                    out += stride;
-                }
-                blk++;
-            }
-            break;
-        case SMK_BLK_FULL:
-            mode = 0;
-			if (kSMK4iD == signature) // In case of Smacker v4 we have three modes
-			{
-				if (bits.GetBit()) mode = 1;
-				else if (bits.GetBit()) mode = 2;
-			}
-
-            while (run-- && blk < blocks)
-			{
-                out = picture + (blk / bw) * (stride * 4) + (blk % bw) * 4;
-                switch (mode)
-				{
-                case 0:
-                    for (i = 0; i < 4; i++)
-					{
-                        pix = GetCode(bits, full_tbl, full_last);
-// FIX                        AV_WL16(out+2, pix);
-						out[2] = pix & 0xff;
-						out[3] = pix >> 8;
-
-                        pix = GetCode(bits, full_tbl, full_last);
-// FIX                        AV_WL16(out, pix);
-						out[0] = pix & 0xff;
-						out[1] = pix >> 8;
-                        out += stride;
+                        hi = clr >> 8;
+                        lo = clr & 0xFF;
+                        for (i = 0; i < 4; i++) 
+                        {
+                            if (map & 1) out[0] = hi; else out[0] = lo;
+                            if (map & 2) out[1] = hi; else out[1] = lo;
+                            if (map & 4) out[2] = hi; else out[2] = lo;
+                            if (map & 8) out[3] = hi; else out[3] = lo;
+                            map >>= 4;
+                            out += stride;
+                        }
+                        blk++;
                     }
-                    break;
-                case 1:
-                    pix = GetCode(bits, full_tbl, full_last);
-                    out[0] = out[1] = pix & 0xFF;
-                    out[2] = out[3] = pix >> 8;
-                    out += stride;
-                    out[0] = out[1] = pix & 0xFF;
-                    out[2] = out[3] = pix >> 8;
-                    out += stride;
-                    pix = GetCode(bits, full_tbl, full_last);
-                    out[0] = out[1] = pix & 0xFF;
-                    out[2] = out[3] = pix >> 8;
-                    out += stride;
-                    out[0] = out[1] = pix & 0xFF;
-                    out[2] = out[3] = pix >> 8;
-                    out += stride;
-                    break;
-                case 2:
-                    for (i = 0; i < 2; i++)
-					{
-                        uint16_t pix1, pix2;
-                        pix2 = GetCode(bits, full_tbl, full_last);
-                        pix1 = GetCode(bits, full_tbl, full_last);
-
-// FIX                        AV_WL16(out, pix1);
-// FIX                        AV_WL16(out+2, pix2);
-						out[0] = pix1 & 0xff;
-						out[1] = pix1 >> 8;
-						out[2] = pix2 & 0xff;
-						out[3] = pix2 >> 8;
-
-                        out += stride;
-
-// FIX                        AV_WL16(out, pix1);
-// FIX                        AV_WL16(out+2, pix2);
-						out[0] = pix1 & 0xff;
-						out[1] = pix1 >> 8;
-						out[2] = pix2 & 0xff;
-						out[3] = pix2 >> 8;
-
-                        out += stride;
+                }
+                break;
+            case SMK_BLK_FULL:
+                {
+                    //FunctionProfiler profiler("DecodeFrame SMK_BLK_FULL");
+                    mode = 0;
+                    if (kSMK4iD == signature) // In case of Smacker v4 we have three modes
+                    {
+                        if (bits.GetBit()) mode = 1;
+                        else if (bits.GetBit()) mode = 2;
                     }
-                    break;
+
+                    while (run-- && blk < blocks)
+                    {
+                        out = picture + (blk / bw) * (stride * 4) + (blk % bw) * 4;
+                        switch (mode)
+                        {
+                        case 0: {
+                            //FunctionProfiler modeProfiler0("DecodeFrame SMK_BLK_FULL mode0");
+                            for (i = 0; i < 4; i++)
+                            {
+                                pix = GetCode(bits, full_tbl, full_last);
+        // FIX                        AV_WL16(out+2, pix);
+                                out[2] = pix & 0xff;
+                                out[3] = pix >> 8;
+
+                                pix = GetCode(bits, full_tbl, full_last);
+        // FIX                        AV_WL16(out, pix);
+                                out[0] = pix & 0xff;
+                                out[1] = pix >> 8;
+                                out += stride;
+                            }
+                        } break;
+                        case 1: {
+                            FunctionProfiler modeProfiler1("DecodeFrame SMK_BLK_FULL mode1");
+                            pix = GetCode(bits, full_tbl, full_last);
+                            out[0] = out[1] = pix & 0xFF;
+                            out[2] = out[3] = pix >> 8;
+                            out += stride;
+                            out[0] = out[1] = pix & 0xFF;
+                            out[2] = out[3] = pix >> 8;
+                            out += stride;
+                            pix = GetCode(bits, full_tbl, full_last);
+                            out[0] = out[1] = pix & 0xFF;
+                            out[2] = out[3] = pix >> 8;
+                            out += stride;
+                            out[0] = out[1] = pix & 0xFF;
+                            out[2] = out[3] = pix >> 8;
+                            out += stride;
+                        } break;
+                        case 2: {
+                            FunctionProfiler modeProfiler2("DecodeFrame SMK_BLK_FULL mode2");
+                            for (i = 0; i < 2; i++)
+                            {
+                                uint16_t pix1, pix2;
+                                pix2 = GetCode(bits, full_tbl, full_last);
+                                pix1 = GetCode(bits, full_tbl, full_last);
+
+        // FIX                        AV_WL16(out, pix1);
+        // FIX                        AV_WL16(out+2, pix2);
+                                out[0] = pix1 & 0xff;
+                                out[1] = pix1 >> 8;
+                                out[2] = pix2 & 0xff;
+                                out[3] = pix2 >> 8;
+
+                                out += stride;
+
+        // FIX                        AV_WL16(out, pix1);
+        // FIX                        AV_WL16(out+2, pix2);
+                                out[0] = pix1 & 0xff;
+                                out[1] = pix1 >> 8;
+                                out[2] = pix2 & 0xff;
+                                out[3] = pix2 >> 8;
+
+                                out += stride;
+                            }
+                        } break;
+                        }
+                        blk++;
+                    }
                 }
-                blk++;
-            }
-            break;
-        case SMK_BLK_SKIP:
-            while (run-- && blk < blocks)
-                blk++;
-            break;
-        case SMK_BLK_FILL:
-            mode = type >> 8;
-            while (run-- && blk < blocks)
-			{
-                uint32_t col;
-                out = picture + (blk / bw) * (stride * 4) + (blk % bw) * 4;
-                col = mode * 0x01010101;
-                for (i = 0; i < 4; i++) {
-                    *((uint32_t*)out) = col;
-                    out += stride;
+                break;
+            case SMK_BLK_SKIP:
+                {
+                    //FunctionProfiler profiler("DecodeFrame SMK_BLK_SKIP");
+                    while (run-- && blk < blocks)
+                        blk++;
                 }
-                blk++;
+                break;
+            case SMK_BLK_FILL:
+                {
+                    //FunctionProfiler profiler("DecodeFrame SMK_BLK_FILL");
+                    mode = type >> 8;
+                    while (run-- && blk < blocks)
+                    {
+                        uint32_t col;
+                        out = picture + (blk / bw) * (stride * 4) + (blk % bw) * 4;
+                        col = mode * 0x01010101;
+                        for (i = 0; i < 4; i++) {
+                            *((uint32_t*)out) = col;
+                            out += stride;
+                        }
+                        blk++;
+                    }
+                }
+                break;
             }
-            break;
         }
-	}
+    }
 
 	/* FIXME - we don't seems to read/use EVERY bit we 'load' into the bit reader
 	 * and as my bitreader reads from the file rather than a buffer read from file
@@ -969,6 +994,7 @@ int SmackerDecoder::DecodeFrame(uint32_t frameSize)
  */
 int SmackerDecoder::DecodeAudio(uint32_t size, SmackerAudioTrack &track)
 {
+	FunctionProfiler profiler("DecodeAudio");
     HuffContext h[4];
 	SmackerCommon::VLCtable vlc[4];
     int16_t *samples = reinterpret_cast<int16_t*>(track.buffer);
@@ -1006,24 +1032,28 @@ int SmackerDecoder::DecodeAudio(uint32_t size, SmackerAudioTrack &track)
     memset(h, 0, sizeof(HuffContext) * 4);
 
     // Initialize
-    for (i = 0; i < (1 << (sampleBits + stereo)); i++) {
-        h[i].length = 256;
-        h[i].maxlength = 0;
-        h[i].current = 0;
-        h[i].bits.resize(256);
-        h[i].lengths.resize(256);
-        h[i].values.resize(256);
+	{
+		FunctionProfiler profiler("DecodeAudio Initialize");
+		for (i = 0; i < (1 << (sampleBits + stereo)); i++) {
+			h[i].length = 256;
+			h[i].maxlength = 0;
+			h[i].current = 0;
+			h[i].bits.resize(256);
+			h[i].lengths.resize(256);
+			h[i].values.resize(256);
 
-        bits.SkipBits(1);
-		DecodeTree(bits, &h[i], 0, 0);
-        bits.SkipBits(1);
+			bits.SkipBits(1);
+			DecodeTree(bits, &h[i], 0, 0);
+			bits.SkipBits(1);
 
-        if (h[i].current > 1) {
+			if (h[i].current > 1) {
 
-			VLC_InitTable(vlc[i], h[i].maxlength, h[i].current, &h[i].lengths[0], &h[i].bits[0]);
-        }
-    }
+				VLC_InitTable(vlc[i], h[i].maxlength, h[i].current, &h[i].lengths[0], &h[i].bits[0]);
+			}
+		}
+	}
     if (sampleBits) { //decode 16-bit data
+		FunctionProfiler profiler("DecodeAudio 16-bit");
         for (i = stereo; i >= 0; i--)
             pred[i] = av_bswap16(bits.GetBits(16));
         for (i = 0; i <= stereo; i++)
@@ -1059,6 +1089,7 @@ int SmackerDecoder::DecodeAudio(uint32_t size, SmackerAudioTrack &track)
         }
     } 
 	else { //8-bit data
+		FunctionProfiler profiler("DecodeAudio 8-bit");
         for (i = stereo; i >= 0; i--)
             pred[i] = bits.GetBits(8);
         for (i = 0; i <= stereo; i++)
